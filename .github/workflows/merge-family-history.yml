@@ -1,0 +1,54 @@
+name: Merge family history into original page
+on:
+  push:
+    paths:
+      - '.github/workflows/merge-family-history.yml'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - name: Append family history without removing original content
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          p=Path('index.html')
+          addon=Path('family-history-addendum.html')
+          if not p.exists() or not addon.exists():
+              raise SystemExit('Required source file missing; no changes made')
+          original=p.read_text(encoding='utf-8')
+          extra=addon.read_text(encoding='utf-8')
+          if '</body>' not in original.lower() or '</body>' not in extra.lower():
+              raise SystemExit('Invalid HTML; no changes made')
+          backup=Path('index-before-family-history-merge.html')
+          if not backup.exists(): backup.write_text(original,encoding='utf-8')
+          # Keep the original document, including all photographs, unchanged above the addition.
+          css=re.search(r'<style[^>]*>(.*?)</style>',extra,re.I|re.S)
+          body=re.search(r'<body[^>]*>(.*?)</body>',extra,re.I|re.S)
+          if not body: raise SystemExit('Addendum body missing')
+          section='<section id="hirano-family-history-added" class="hirano-addon"><style>'+ (css.group(1) if css else '') + '</style>'+body.group(1)+'</section>'
+          section=section.replace('href="./"','href="#top"')
+          section=section.replace('href="./">','href="#top">')
+          start='<!-- HIRANO_FAMILY_HISTORY_BEGIN -->'
+          end='<!-- HIRANO_FAMILY_HISTORY_END -->'
+          block=start+'\n'+section+'\n'+end
+          if start in original and end in original:
+              merged=re.sub(re.escape(start)+r'.*?'+re.escape(end),lambda _:block,original,flags=re.S)
+          else:
+              merged=re.sub(r'</body>',lambda m:block+'\n'+m.group(0),original,count=1,flags=re.I)
+          if len(merged)<len(original)*0.9: raise SystemExit('Safety check failed')
+          p.write_text(merged,encoding='utf-8')
+          print('Original bytes:',len(original.encode()),'Merged bytes:',len(merged.encode()))
+          PY
+      - name: Commit preserved original plus appended section
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.html index-before-family-history-merge.html
+          git diff --cached --quiet || (git commit -m "Append family history to original page without deleting content" && git push)
